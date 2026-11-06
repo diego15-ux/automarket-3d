@@ -1,0 +1,9 @@
+// Solo para el editor y para revisar los tipos de los seeds (no compila nada; el build usa ../tsconfig.json).
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "..",
+    "noEmit": true
+  },
+  "include": ["*.ts", "../prisma.config.ts"]
+}

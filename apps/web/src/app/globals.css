@@ -1,0 +1,402 @@
+@import 'tailwindcss';
+
+/* Modo día/noche por clase en <html> (la elige el usuario; por defecto, la del sistema). */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
+ * Sistema visual de los diseños «AutoMarket 3D · Nuevos diseños» (canvas):
+ *   · Colores de agencia de autos: grafito y rojo (#C8102E); el verde queda solo para
+ *     estados buenos (verificado, aprobado, buen precio) y el dorado para Premium.
+ *   · Claro: gris #F3F4F6, blanco y tinta grafito #15171A.
+ *   · Oscuro: grafito #0E0F11, superficies #17191C y rojo claro #F47C85 para acentos.
+ *   · Letra Figtree en PC y Geist en el teléfono; cifras y etiquetas en Geist Mono.
+ *   · Botones y etiquetas en píldora; tarjetas de 22 px; campos de 12 px.
+ * Las utilidades (bg-canvas, text-ink, border-line…) apuntan a variables que cambian con el
+ * tema, así ningún componente necesita variantes `dark:` para lo básico.
+ */
+@theme inline {
+  --font-sans: var(--am-font), ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--am-font), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+
+  --color-canvas: var(--am-canvas);
+  --color-surface: var(--am-surface);
+  --color-sunken: var(--am-sunken);
+  --color-line: var(--am-line);
+  --color-edge: var(--am-edge);
+  --color-ink: var(--am-ink);
+  --color-muted: var(--am-muted);
+  --color-faint: var(--am-faint);
+  --color-brand: var(--am-brand);
+  --color-brand-600: var(--am-brand-600);
+  --color-brand-fg: var(--am-brand-fg);
+  --color-on-brand: var(--am-on-brand);
+  --color-soft: var(--am-soft);
+  /* Campos y mosaicos de los formularios largos (publicar): borde de campo con contraste 3:1. */
+  --color-tile: var(--am-tile);
+  --color-field: var(--am-field);
+  --color-field-line: var(--am-field-line);
+  --color-card-tile: var(--am-card-tile);
+  /* Acento claro sobre fondos grafito (textos y detalles); los rellenos usan bg-brand. */
+  --color-mint: #f47c85;
+  --color-night: #0e0f11;
+  --color-night-2: #17191c;
+  --color-night-line: #25282d;
+  --color-gold: var(--am-gold);
+  --color-gold-fg: var(--am-gold-fg);
+  --color-gold-soft: var(--am-gold-soft);
+  --color-success: var(--am-success);
+  --color-success-fg: var(--am-success-fg);
+  --color-success-soft: var(--am-success-soft);
+  --color-danger: var(--am-danger);
+  --color-danger-fg: var(--am-danger-fg);
+  --color-danger-soft: var(--am-danger-soft);
+  /* «Reservado» en el chat (índigo): se distingue de «En negociación» (dorado). */
+  --color-reserved-soft: var(--am-reserved-soft);
+  --color-reserved-fg: var(--am-reserved-fg);
+  /* Burbuja propia del chat: tinta en claro, rojo oscuro en modo oscuro. */
+  --color-mine: var(--am-mine);
+  --color-on-mine: var(--am-on-mine);
+
+  /* Sombras de los diseños: tarjeta que flota y capas (menús, diálogos, avisos). */
+  --shadow-card: 0 2px 6px rgb(21 23 26 / 0.06), 0 24px 40px -24px rgb(21 23 26 / 0.35);
+  --shadow-tab: 0 1px 2px rgb(21 23 26 / 0.08), 0 6px 14px -8px rgb(21 23 26 / 0.35);
+  --shadow-pop: 0 2px 6px rgb(21 23 26 / 0.08), 0 24px 40px -20px rgb(21 23 26 / 0.45);
+}
+
+/* Radios de los diseños: rounded-sm = campos y miniaturas (12 px), rounded-md = tarjetas (22 px). */
+@theme {
+  --radius-sm: 0.75rem;
+  --radius-md: 1.375rem;
+}
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --am-font: var(--font-figtree);
+    --am-canvas: #f3f4f6;
+    --am-surface: #ffffff;
+    --am-sunken: #ebedf0;
+    --am-line: #e2e5e9;
+    --am-edge: #c7cbd1;
+    --am-ink: #15171a;
+    --am-muted: #5c6270;
+    --am-faint: #8a909b;
+    --am-brand: #c8102e;
+    --am-brand-600: #a50d26;
+    --am-brand-fg: #b30e29;
+    --am-on-brand: #ffffff;
+    --am-soft: #fbecee;
+    --am-tile: #f3f4f6;
+    --am-field: #ffffff;
+    --am-field-line: #8d939c;
+    --am-card-tile: #ebedf0;
+    --am-gold: #c9771a;
+    --am-gold-fg: #8a5a00;
+    --am-gold-soft: #fff4db;
+    --am-success: #2f7a4f;
+    --am-success-fg: #2a6e47;
+    --am-success-soft: #e7f2eb;
+    --am-danger: #b42318;
+    --am-danger-fg: #b42318;
+    --am-danger-soft: rgb(180 35 24 / 0.1);
+    --am-reserved-soft: #eef2ff;
+    --am-reserved-fg: #3730a3;
+    --am-mine: #15171a;
+    --am-on-mine: #ffffff;
+  }
+
+  /* Teléfono: letra Geist, como el estilo A de los diseños. */
+  @media (max-width: 639px) {
+    :root {
+      --am-font: var(--font-geist);
+    }
+  }
+
+  .dark {
+    color-scheme: dark;
+    --am-canvas: #0e0f11;
+    --am-surface: #17191c;
+    --am-sunken: #121316;
+    --am-line: #272a2f;
+    --am-edge: #3b3f46;
+    --am-ink: #f2f3f5;
+    --am-muted: #a2a7b0;
+    --am-faint: #7d838d;
+    --am-brand: #c8102e;
+    --am-brand-600: #d9223f;
+    --am-brand-fg: #f47c85;
+    --am-on-brand: #ffffff;
+    --am-soft: rgb(244 124 133 / 0.12);
+    --am-tile: #1c1f23;
+    --am-field: #121316;
+    --am-field-line: #6b717b;
+    --am-card-tile: #1c1f23;
+    --am-gold: #d6ae6a;
+    --am-gold-fg: #d6ae6a;
+    --am-gold-soft: rgb(214 174 106 / 0.14);
+    --am-success: #74c193;
+    --am-success-fg: #7cc79a;
+    --am-success-soft: rgb(116 193 147 / 0.13);
+    --am-danger: #ff8a80;
+    --am-danger-fg: #ff8a80;
+    --am-danger-soft: rgb(255 138 128 / 0.14);
+    --am-reserved-soft: rgb(129 140 248 / 0.16);
+    --am-reserved-fg: #a5b4fc;
+    --am-mine: #a80f27;
+    --am-on-mine: #ffffff;
+  }
+
+  html {
+    scroll-behavior: smooth;
+    font-feature-settings: 'kern', 'calt';
+  }
+
+  body {
+    font-size: 15px;
+    line-height: 1.55;
+  }
+
+  /* Titulares como en los diseños: la misma letra, muy gruesa y apretada. */
+  .font-display {
+    font-weight: 800;
+    letter-spacing: -0.03em;
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--am-brand) 25%, transparent);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--am-ink);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    html {
+      scroll-behavior: auto;
+    }
+    *,
+    ::before,
+    ::after {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+    }
+  }
+}
+
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+/* Cifras alineadas para precios, kilómetros y contadores. */
+@utility figures {
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+/* Etiqueta de sección: texto pequeño con una regla encima (en vez de «eyebrows» en mayúsculas). */
+@utility kicker {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--am-muted);
+}
+
+/* Enlace de texto subrayado, al estilo de una publicación impresa. */
+@utility link {
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  text-decoration-color: color-mix(in srgb, currentColor 35%, transparent);
+  &:hover {
+    text-decoration-color: currentColor;
+  }
+}
+
+/* Cambio de diapositiva del carrusel del login (solo si la persona no pidió menos movimiento). */
+@keyframes am-slide-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/*
+ * Pantallas con encabezado propio (asistente para publicar, catálogo, ficha, comparar): el
+ * encabezado genérico de la página se oculta mientras están en pantalla.
+ */
+body:has([data-vehicle-editor], [data-own-header]) [data-page-header] {
+  display: none;
+}
+
+/* Entradas del asistente: un paso aparece subiendo un poco; la marca de listo hace «pop». */
+@keyframes am-step-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes am-pop {
+  0% {
+    transform: scale(0.4);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+/* Barras de las estadísticas del panel: crecen desde la base. */
+@keyframes am-bar {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+/* Copiloto del admin: los mensajes entran subiendo y los tres puntos de «pensando» laten. */
+@keyframes am-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes am-dot {
+  0%,
+  80%,
+  100% {
+    opacity: 0.25;
+  }
+  40% {
+    opacity: 1;
+  }
+}
+@utility am-in {
+  animation: am-in 320ms cubic-bezier(0.2, 0.9, 0.25, 1) both;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+@utility am-dot {
+  animation: am-dot 1.2s infinite;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+@utility am-step-in {
+  animation: am-step-in 340ms cubic-bezier(0.2, 0.9, 0.25, 1) both;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+@utility am-pop {
+  animation: am-pop 460ms cubic-bezier(0.2, 0.9, 0.25, 1) both;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+
+/* Ficha en el teléfono: la foto llega arriba del todo (con su propio «Volver»), sin la barra del sitio. */
+@media (max-width: 639px) {
+  body:has([data-phone-immersive]) [data-app-header] {
+    display: none;
+  }
+}
+
+/* Perfil con pestañas: ocupa todo el ancho (la página aún reserva una columna para la opinión, que va dentro). */
+div:has(> [data-profile-screen]) {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+#opinion:empty {
+  display: none;
+}
+
+/* Portada (como el index.html original, sin brillos): velo sobre la foto, cuadrícula tenue y rótulo de sección. */
+.am-hero-veil {
+  background:
+    linear-gradient(90deg, var(--am-canvas) 0%, color-mix(in srgb, var(--am-canvas) 94%, transparent) 28%, color-mix(in srgb, var(--am-canvas) 62%, transparent) 55%, color-mix(in srgb, var(--am-canvas) 12%, transparent) 100%),
+    linear-gradient(0deg, var(--am-canvas) 0%, transparent 30%);
+}
+@media (max-width: 1023px) {
+  .am-hero-veil {
+    background: linear-gradient(0deg, var(--am-canvas) 8%, color-mix(in srgb, var(--am-canvas) 88%, transparent) 50%, color-mix(in srgb, var(--am-canvas) 66%, transparent) 100%);
+  }
+}
+.am-grid-pattern {
+  background-image: linear-gradient(color-mix(in srgb, var(--am-ink) 5%, transparent) 1px, transparent 1px), linear-gradient(90deg, color-mix(in srgb, var(--am-ink) 5%, transparent) 1px, transparent 1px);
+  background-size: 56px 56px;
+  mask-image: radial-gradient(ellipse 60% 60% at 25% 45%, #000 10%, transparent 75%);
+}
+.am-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--am-brand-fg);
+}
+.am-eyebrow::before {
+  content: '';
+  width: 1.5rem;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--am-brand-fg);
+}
+.am-showroom-track {
+  --fl: 0px;
+  --fr: 0px;
+  mask-image: linear-gradient(90deg, transparent 0, #000 var(--fl), #000 calc(100% - var(--fr)), transparent 100%);
+}
+.am-showroom-track[data-fade-left] {
+  --fl: 44px;
+}
+.am-showroom-track[data-fade-right] {
+  --fr: 44px;
+}
+/* Indicador «bajar» de la portada: solo en pantallas altas, donde no tapa las cifras. */
+.am-scroll-cue {
+  display: none;
+}
+@media (min-width: 768px) and (min-height: 980px) {
+  .am-scroll-cue {
+    display: flex;
+  }
+}
+
+/* Copiloto: el botón sube cuando abajo hay otra barra fija (ficha en el teléfono, comparar). */
+@media (max-width: 639px) {
+  body:has([data-vehicle-phone-bar]) .am-copilot-launcher {
+    bottom: calc(100px + env(safe-area-inset-bottom));
+  }
+  body:has([data-copilot-open]) {
+    overflow: hidden;
+  }
+}
+body:has([aria-label='Autos para comparar'][aria-hidden='false']) .am-copilot-launcher {
+  bottom: 96px;
+}

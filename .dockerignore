@@ -1,0 +1,21 @@
+# Lo que no entra en la imagen del servidor (deploy/Dockerfile).
+.git
+**/node_modules
+**/.next
+**/dist
+**/*.tsbuildinfo
+apps/api/src/generated
+apps/api/.dev-s3
+apps/api/.dev-db
+**/.env
+**/.env.*
+!**/.env.example
+deploy/.env
+deploy/respaldos
+copias-del-proyecto
+respaldos
+scripts/parches-respaldo
+scripts/launcher
+*.exe
+*.log
+*.cmd

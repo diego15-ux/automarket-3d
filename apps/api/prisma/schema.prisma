@@ -1,0 +1,1228 @@
+// =============================================================================
+// AutoMarket 3D · Esquema relacional (MySQL 8.0.16+ / MariaDB 10.4+ de XAMPP · Prisma ORM 7)
+// -----------------------------------------------------------------------------
+// Convenciones:
+//   · PK UUID v7 en CHAR(36) (ordenables en el tiempo → buena localidad en InnoDB).
+//   · Tablas en snake_case plural (@@map); columnas en camelCase (default Prisma).
+//   · Dinero en DECIMAL(12,2) + moneda ISO 4217; tasas en DECIMAL(5,4). Nunca FLOAT.
+//   · Fechas en DATETIME(3) UTC.
+//   · MySQL no tiene índices parciales: la unicidad condicional se garantiza con
+//     claves que mantiene la aplicación (cartKey, openKey) + índice UNIQUE, y el
+//     bloqueo de un vehículo con Vehicle.lockedReservationId UNIQUE.
+//   · Los CHECK viven en prisma/sql/constraints.sql y forman parte de la
+//     migración inicial (prisma/migrations/*_init).
+// =============================================================================
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../src/generated/prisma"
+  moduleFormat = "esm"
+}
+
+datasource db {
+  provider = "mysql"
+  // Prisma 7: la URL de conexión se declara en prisma.config.ts
+}
+
+// ─────────────────────────────────────────────────────────────────── Enums ──
+
+/// Roles unificados: todo USER compra, reserva y publica desde la misma cuenta.
+enum Role {
+  USER
+  ADMIN
+  ADMIN_ONE
+  SUPERVISOR
+}
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+/// Persona natural o concesionario (este último con datos fiscales obligatorios)
+enum AccountType {
+  INDIVIDUAL
+  DEALER
+}
+
+enum AuthProvider {
+  GOOGLE
+  APPLE
+}
+
+enum KycStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum KycDocumentType {
+  NATIONAL_ID
+  PASSPORT
+  DRIVER_LICENSE
+  SELFIE
+  PROOF_OF_ADDRESS
+  BUSINESS_REGISTRATION
+}
+
+/// FREE: cualquier cuenta · PREMIUM: personas naturales · DEALER_*: concesionarios
+enum PlanCode {
+  FREE
+  PREMIUM
+  DEALER_BASIC
+  DEALER_PRO
+}
+
+enum BillingCycle {
+  MONTHLY
+  YEARLY
+}
+
+enum MembershipSource {
+  BINANCE
+  ADMIN
+  SYSTEM
+}
+
+enum VehicleCategory {
+  SPORTS
+  SUV
+  SEDAN
+  ELECTRIC
+  PICKUP
+  CONVERTIBLE
+  HATCHBACK
+}
+
+enum FuelType {
+  GASOLINE
+  DIESEL
+  HYBRID
+  PLUG_IN_HYBRID
+  ELECTRIC
+}
+
+enum Transmission {
+  MANUAL
+  AUTOMATIC
+  DUAL_CLUTCH
+  CVT
+}
+
+enum Drivetrain {
+  FWD
+  RWD
+  AWD
+  FOUR_WD
+}
+
+enum VehicleCondition {
+  NEW
+  USED
+}
+
+enum VehicleStatus {
+  DRAFT
+  PUBLISHED
+  PAUSED
+  RESERVED
+  PENDING_SALE
+  SOLD
+  EXPIRED
+  ARCHIVED
+}
+
+enum VehicleSaleStatus {
+  PENDING_PAYMENT
+  COMPLETED
+  CANCELLED
+}
+
+enum MediaKind {
+  IMAGE
+  VIDEO
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  AUDIO
+}
+
+/// CART = apartado sin depósito (caduca) · RESERVATION = reserva con abono que el
+/// comprador paga directamente al vendedor (P2P; la plataforma no toca ese dinero)
+enum ReserveType {
+  CART
+  RESERVATION
+}
+
+/// RESERVATION: AWAITING_SELLER → ACCEPTED (vehículo bloqueado) → COMPLETED (venta)
+///              (o REJECTED / CANCELLED / EXPIRED, y el vehículo vuelve a estar disponible)
+enum ReserveStatus {
+  ACTIVE
+  AWAITING_SELLER
+  ACCEPTED
+  REJECTED
+  CANCELLED
+  EXPIRED
+  COMPLETED
+}
+
+/// Lo que cobra la plataforma con Binance: membresías y comisiones post-venta.
+/// RESERVATION es histórico (depósitos cobrados antes del modelo P2P).
+enum PaymentPurpose {
+  MEMBERSHIP
+  RESERVATION
+  COMMISSION
+  BOOST
+}
+
+/// PENDING → (SUBMITTED, solo manual) → PAID → (REFUND_PENDING) → REFUNDED / PARTIALLY_REFUNDED
+enum PaymentStatus {
+  PENDING
+  SUBMITTED
+  PAID
+  REJECTED
+  EXPIRED
+  CANCELLED
+  REFUND_PENDING
+  REFUNDED
+  PARTIALLY_REFUNDED
+  FAILED
+}
+
+/// MERCHANT = API de Binance Pay (QR + webhook) · MANUAL = pago al Pay ID verificado por un administrador
+enum PaymentMode {
+  MERCHANT
+  MANUAL
+}
+
+enum WebhookEventStatus {
+  PROCESSED
+  IGNORED
+  FAILED
+}
+
+enum LedgerType {
+  MEMBERSHIP_REVENUE
+  SALE_COMMISSION
+  BOOST_REVENUE
+}
+
+enum ReportReason {
+  FRAUD
+  WRONG_INFO
+  OFFENSIVE
+  SPAM
+  OTHER
+}
+
+enum ReportStatus {
+  OPEN
+  RESOLVED
+  DISMISSED
+}
+
+enum ReviewStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ContactStatus {
+  NEW
+  HANDLED
+}
+
+enum EmailStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+// ──────────────────────────────────────────────────────── Identidad / Auth ──
+
+model User {
+  id                 String        @id @default(uuid(7)) @db.Char(36)
+  email              String        @unique @db.VarChar(254) /// siempre en minúsculas
+  passwordHash       String?       @db.VarChar(255) /// argon2id; null si la cuenta solo usa OAuth
+  name               String        @db.VarChar(120)
+  phone              String?       @db.VarChar(32)
+  avatarUrl          String?       @db.VarChar(1024)
+  avatarKey          String?       @db.VarChar(512)
+  bio                String?       @db.VarChar(500)
+  role               Role          @default(USER)
+  status             UserStatus    @default(ACTIVE)
+  accountType        AccountType   @default(INDIVIDUAL)
+  /// Datos fiscales del concesionario (obligatorios si accountType = DEALER; CHECK en BD)
+  businessName       String?       @db.VarChar(160) /// razón social
+  taxId              String?       @unique @db.VarChar(20) /// RIF (p. ej. J-12345678-9) u otra identificación fiscal
+  fiscalAddress      String?       @db.VarChar(300)
+  businessPhone      String?       @db.VarChar(32)
+  /// Horario de atención (texto libre de la agencia; sale en su página pública)
+  businessHours      String?       @db.VarChar(120)
+  /// País (ISO 3166-1 alfa-2) y ciudad: obligatorios al registrarse; las cuentas
+  /// OAuth los completan antes de publicar o reservar.
+  country            String?       @db.Char(2)
+  city               String?       @db.VarChar(80)
+  /// true cuando cumplimiento aprueba el KYC → insignia «Vendedor verificado»
+  isVerified         Boolean       @default(false)
+  verifiedAt         DateTime?
+  emailVerifiedAt    DateTime?
+  /// Aceptación de Términos y Política de Privacidad (evidencia legal)
+  termsAcceptedAt    DateTime?
+  /// Se incrementa para invalidar todas las sesiones (logout global, cambio de contraseña)
+  tokenVersion       Int           @default(0)
+  lastLoginAt        DateTime?
+  // Membresía vigente (el histórico vive en membership_periods)
+  planCode           PlanCode      @default(FREE)
+  planCycle          BillingCycle?
+  planExpiresAt      DateTime?
+  /// Mes (AAAA-MM) del último destacado mensual consumido (plan Concesionario Básico)
+  featureCreditMonth String?       @db.Char(7)
+  /// «Bajadas de precio en tus guardados» (Mis alertas): avisar cuando baja un auto guardado
+  priceDropAlerts    Boolean       @default(true)
+  createdAt          DateTime      @default(now())
+  updatedAt          DateTime      @updatedAt
+  deletedAt          DateTime?
+
+  plan                Plan                 @relation(fields: [planCode], references: [code])
+  accounts            OAuthAccount[]
+  refreshTokens       RefreshToken[]
+  passwordResets      PasswordResetToken[]
+  vehicles            Vehicle[]            @relation("SellerVehicles")
+  reportedSales       VehicleSale[]
+  kycDocuments        KycDocument[]        @relation("KycOwner")
+  kycReviews          KycDocument[]        @relation("KycReviewer")
+  buyerConversations  Conversation[]       @relation("ConversationBuyer")
+  sellerConversations Conversation[]       @relation("ConversationSeller")
+  messages            ChatMessage[]
+  purchases           CartReserve[]        @relation("ReserveBuyer")
+  sales               CartReserve[]        @relation("ReserveSeller")
+  sellerReviewsGiven  SellerReview[]       @relation("SellerReviewBuyer")
+  sellerReviewsReceived SellerReview[]     @relation("SellerReviewSeller")
+  payments            Payment[]
+  memberships         MembershipPeriod[]   @relation("MembershipOwner")
+  membershipsGranted  MembershipPeriod[]   @relation("MembershipGrantedBy")
+  ledgerEntries       LedgerEntry[]
+  paymentsReviewed    Payment[]            @relation("PaymentReviewer")
+  reports             Report[]             @relation("ReportAuthor")
+  reportsResolved     Report[]             @relation("ReportResolver")
+  reportsReceived     Report[]             @relation("ReportTarget")
+  review              Review?              @relation("ReviewAuthor")
+  reviewsModerated    Review[]             @relation("ReviewModerator")
+  notifications       Notification[]
+  contactMessages     ContactMessage[]
+  auditLogs           AuditLog[]
+  vehicleWatches      VehicleWatch[]
+  favorites           VehicleFavorite[]
+  searchAlerts        SearchAlert[]
+  dealersFollowed     DealerFollow[]       @relation("DealerFollower")
+  boosts              Boost[]
+  followers           DealerFollow[]       @relation("DealerFollowed")
+
+  @@index([country, city])
+  @@index([planCode, planExpiresAt])
+  @@index([createdAt])
+  @@map("users")
+}
+
+model OAuthAccount {
+  id                String       @id @default(uuid(7)) @db.Char(36)
+  userId            String       @db.Char(36)
+  provider          AuthProvider
+  providerAccountId String       @db.VarChar(255)
+  createdAt         DateTime     @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+  @@map("oauth_accounts")
+}
+
+/// Refresh tokens opacos con rotación. Si se reutiliza uno revocado,
+/// se revoca toda su familia (detección de robo de sesión).
+model RefreshToken {
+  id        String    @id @default(uuid(7)) @db.Char(36)
+  userId    String    @db.Char(36)
+  tokenHash String    @unique @db.Char(64) /// SHA-256; el token nunca se guarda en claro
+  familyId  String    @db.Char(36)
+  expiresAt DateTime
+  revokedAt DateTime?
+  userAgent String?   @db.VarChar(512)
+  ip        String?   @db.VarChar(45)
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([familyId])
+  @@map("refresh_tokens")
+}
+
+/// Enlaces de recuperación de contraseña de un solo uso (se guarda el hash).
+model PasswordResetToken {
+  id        String    @id @default(uuid(7)) @db.Char(36)
+  userId    String    @db.Char(36)
+  tokenHash String    @unique @db.Char(64)
+  expiresAt DateTime
+  usedAt    DateTime?
+  ip        String?   @db.VarChar(45)
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("password_reset_tokens")
+}
+
+// ───────────────────────────────────────────────────── Membresías y ajustes ──
+
+/// Catálogo de planes. Los precios y la comisión los edita el administrador.
+model Plan {
+  code                   PlanCode     @id
+  name                   String       @db.VarChar(40)
+  /// Tipo de cuenta que puede contratarlo (null = cualquiera, p. ej. el plan gratuito)
+  accountType            AccountType?
+  /// null = publicaciones activas ilimitadas
+  maxActiveListings      Int?
+  /// null = las publicaciones no vencen
+  listingDurationDays    Int?         @db.SmallInt
+  /// Comisión post-venta sobre el precio de cada venta concretada (0.0500 = 5 %)
+  commissionRate         Decimal      @db.Decimal(5, 4)
+  /// Destacados simultáneos elegidos por el usuario (Concesionario Pro: 3)
+  featuredSlots          Int          @default(0) @db.SmallInt
+  /// Destacados automáticos por mes (Concesionario Básico: 1)
+  monthlyFeaturedCredits Int          @default(0) @db.SmallInt
+  /// Prioridad en el ranking de búsqueda (Concesionario Pro: máxima)
+  searchBoost            Int          @default(0) @db.SmallInt
+  priceMonthly           Decimal      @db.Decimal(10, 2)
+  priceYearly            Decimal      @db.Decimal(10, 2)
+  currency               String       @default("USD") @db.Char(3)
+  updatedAt              DateTime     @updatedAt
+
+  users User[]
+
+  @@map("plans")
+}
+
+/// Histórico de periodos de membresía (pagos con Binance, altas manuales, bajas).
+model MembershipPeriod {
+  id          String           @id @default(uuid(7)) @db.Char(36)
+  userId      String           @db.Char(36)
+  planCode    PlanCode
+  cycle       BillingCycle?
+  source      MembershipSource
+  startsAt    DateTime
+  endsAt      DateTime?
+  amount      Decimal?         @db.Decimal(10, 2)
+  currency    String           @default("USD") @db.Char(3)
+  /// Un pago activa como mucho un periodo (idempotencia de webhooks)
+  paymentId   String?          @unique @db.Char(36)
+  grantedById String?          @db.Char(36)
+  note        String?          @db.VarChar(500)
+  createdAt   DateTime         @default(now())
+
+  user      User     @relation("MembershipOwner", fields: [userId], references: [id], onDelete: Cascade)
+  grantedBy User?    @relation("MembershipGrantedBy", fields: [grantedById], references: [id], onDelete: SetNull)
+  payment   Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("membership_periods")
+}
+
+/// Parámetros globales (fila única id = 1) editables desde el panel.
+model PlatformSettings {
+  id                  Int       @id @default(1)
+  /// Plazo del vendedor para confirmar o rechazar una solicitud de reserva (1–72 h)
+  sellerResponseHours Int       @default(48) @db.SmallInt
+  /// Días que el vehículo queda reservado; si la venta no se concreta vuelve a estar disponible (1–30)
+  reservationHoldDays Int       @default(7) @db.SmallInt
+  /// Días para pagar la comisión post-venta con Binance (1–60)
+  commissionDueDays   Int       @default(7) @db.SmallInt
+  /// Fondo del login (bucket público): URL servida y clave para borrar la anterior
+  loginBackgroundUrl  String?   @db.VarChar(1024)
+  loginBackgroundKey  String?   @db.VarChar(512)
+  /// Foto grande de la portada (bucket público); sin ella la web usa su foto predeterminada
+  homeHeroUrl         String?   @db.VarChar(1024)
+  homeHeroKey         String?   @db.VarChar(512)
+  /// Términos y Condiciones editables desde el panel (texto con encabezados «#» y listas «-»)
+  termsContent        String?   @db.MediumText
+  termsUpdatedAt      DateTime?
+  /// Cuenta de cobro de la empresa para el pago manual con Binance. Solo la cambia el
+  /// administrador principal (ADMIN_ONE); usuarios y concesionarios solo la ven.
+  /// null = se usa BINANCE_PAY_ID del .env (instalaciones anteriores al panel)
+  binancePayId        String?   @db.VarChar(20)
+  binancePayName      String?   @db.VarChar(80)
+  /// QR del Pay ID (bucket público, carpeta binance-qr/)
+  binanceQrUrl        String?   @db.VarChar(1024)
+  binanceQrKey        String?   @db.VarChar(512)
+  binanceUpdatedAt    DateTime?
+  binanceUpdatedById  String?   @db.Char(36)
+  /// Redes sociales públicas: [{ "network": "INSTAGRAM", "url": "https://…" }]
+  socialLinks         Json?
+  /// Destacados pagados («Destacar»): precios en USDT y cupos. Solo los cambia el administrador.
+  boostPriceCity3     Decimal   @default(3) @db.Decimal(10, 2)
+  boostPriceCity7     Decimal   @default(6) @db.Decimal(10, 2)
+  boostPriceHome      Decimal   @default(15) @db.Decimal(10, 2)
+  loginPrice1         Decimal   @default(3) @db.Decimal(10, 2)
+  loginPrice2         Decimal   @default(6) @db.Decimal(10, 2)
+  loginPrice3         Decimal   @default(8) @db.Decimal(10, 2)
+  /// Cupos por zona (ciudad × tipo de auto) que comparten «Impulso» y «Semana destacada»
+  cityBoostSlots      Int       @default(3) @db.SmallInt
+  /// Cupos de «Portada» en todo el país
+  homeBoostSlots      Int       @default(10) @db.SmallInt
+  /// Cupos por día de la pantalla de entrada (carrusel de Entrar y Crear cuenta)
+  loginSlots          Int       @default(6) @db.SmallInt
+  /// «Pantalla de entrada» a la venta (apagado: el login no muestra autos; los turnos pagados se respetan)
+  loginOnSale         Boolean   @default(false)
+  updatedAt           DateTime  @updatedAt
+
+  @@map("platform_settings")
+}
+
+// ─────────────────────────────────────────────────────────────── Vehículos ──
+
+model Vehicle {
+  id                  String           @id @default(uuid(7)) @db.Char(36)
+  sellerId            String           @db.Char(36)
+  slug                String           @unique @db.VarChar(160)
+  make                String           @db.VarChar(60) /// marca
+  model               String           @db.VarChar(80)
+  version             String?          @db.VarChar(120) /// versión / acabado
+  year                Int              @db.SmallInt
+  condition           VehicleCondition @default(USED)
+  /// 0 = nuevo · 1 = único dueño · 2 = dos dueños · 3 = tres o más
+  ownersCount         Int              @default(1) @db.TinyInt
+  mileageKm           Int
+  price               Decimal          @db.Decimal(12, 2)
+  currency            String           @default("USD") @db.Char(3)
+  /// Abono de reserva que fija el vendedor (se paga directamente a él y se descuenta del precio)
+  reservationAmount   Decimal?         @db.Decimal(12, 2)
+  category            VehicleCategory
+  fuelType            FuelType
+  transmission        Transmission
+  drivetrain          Drivetrain?
+  horsepower          Int?             @db.SmallInt
+  torqueNm            Int?             @db.SmallInt
+  engineCc            Int?
+  batteryKwh          Decimal?         @db.Decimal(5, 1)
+  rangeKm             Int?             @db.SmallInt
+  exteriorColor       String?          @db.VarChar(40)
+  interiorColor       String?          @db.VarChar(40)
+  doors               Int?             @db.TinyInt
+  seats               Int?             @db.TinyInt
+  /// Privado: jamás se devuelve completo en endpoints públicos
+  vin                 String?          @unique @db.VarChar(17)
+  description         String?          @db.Text
+  /// Ficha técnica extendida sin migraciones por cada campo nuevo
+  specs               Json?
+  city                String           @db.VarChar(80)
+  country             String           @db.Char(2) /// ISO 3166-1 alfa-2
+  latitude            Decimal?         @db.Decimal(9, 6)
+  longitude           Decimal?         @db.Decimal(9, 6)
+  status              VehicleStatus    @default(DRAFT)
+  /// Copia del searchBoost del plan del vendedor (se recalcula al cambiar de plan)
+  searchBoost         Int              @default(0) @db.SmallInt
+  /// Destacado (carrusel + ranking) mientras featuredUntil > ahora
+  featuredAt          DateTime?
+  featuredUntil       DateTime?
+  /// Reserva ACEPTADA que bloquea el vehículo: UNIQUE + UPDATE condicional = sin doble venta
+  lockedReservationId String?          @unique @db.Char(36)
+  /// La reserva que lo bloquea está «En negociación»: así lo ve el público (null al liberarse o venderse)
+  negotiatingAt       DateTime?
+
+  // Activo 3D: GLB comprimido (Draco/Meshopt + texturas KTX2) servido por CDN
+  model3dUrl       String? @db.VarChar(1024)
+  model3dPosterUrl String? @db.VarChar(1024) /// imagen de respaldo si no hay WebGL
+  model3dSizeBytes Int?
+
+  publishedAt DateTime?
+  /// Vencimiento según el plan (null = sin vencimiento, plan Concesionario Pro)
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  deletedAt   DateTime?
+
+  seller        User           @relation("SellerVehicles", fields: [sellerId], references: [id], onDelete: Restrict)
+  media         VehicleMedia[]
+  conversations Conversation[]
+  reserves      CartReserve[]
+  sales         VehicleSale[]
+  carouselItem  CarouselItem?
+  reports       Report[]
+  watchers      VehicleWatch[]
+  favorites     VehicleFavorite[]
+  boosts        Boost[]
+  viewDays      VehicleViewDay[]
+
+  @@index([status, country, city])
+  @@index([status, category, publishedAt(sort: Desc)])
+  @@index([status, price])
+  @@index([status, expiresAt])
+  @@index([make, model, year])
+  @@index([sellerId, status])
+  @@index([featuredUntil])
+  @@map("vehicles")
+}
+
+/// Galería del anuncio: hasta 10 fotos o vídeos (subida directa a S3 con URL prefirmada).
+model VehicleMedia {
+  id         String    @id @default(uuid(7)) @db.Char(36)
+  vehicleId  String    @db.Char(36)
+  kind       MediaKind @default(IMAGE)
+  storageKey String    @unique @db.VarChar(512) /// clave en S3
+  url        String    @db.VarChar(1024) /// URL pública vía CDN
+  mimeType   String    @db.VarChar(100)
+  sizeBytes  Int       @default(0)
+  alt        String?   @db.VarChar(160)
+  position   Int       @default(0) @db.SmallInt
+  width      Int?
+  height     Int?
+  durationMs Int?
+  createdAt  DateTime  @default(now())
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([vehicleId, position])
+  @@map("vehicle_media")
+}
+
+/// Catálogo de marcas que mantiene el administrador: el formulario de publicar solo ofrece
+/// las activas (los anuncios existentes conservan su marca aunque se desactive).
+model VehicleBrand {
+  id        String   @id @default(uuid(7)) @db.Char(36)
+  name      String   @unique @db.VarChar(60)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  models VehicleBrandModel[]
+
+  @@map("vehicle_brands")
+}
+
+/// Modelos sugeridos de cada marca (el vendedor puede escribir otro).
+model VehicleBrandModel {
+  id        String   @id @default(uuid(7)) @db.Char(36)
+  brandId   String   @db.Char(36)
+  name      String   @db.VarChar(80)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  brand VehicleBrand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@unique([brandId, name])
+  @@map("vehicle_brand_models")
+}
+
+/// Carrusel de la landing: selección y orden que controla el administrador.
+model CarouselItem {
+  id        String   @id @default(uuid(7)) @db.Char(36)
+  vehicleId String   @unique @db.Char(36)
+  position  Int      @default(0) @db.SmallInt
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@index([isActive, position])
+  @@map("carousel_items")
+}
+
+// ───────────────────────────────────────────────────────────────────── KYC ──
+
+model KycDocument {
+  id              String          @id @default(uuid(7)) @db.Char(36)
+  userId          String          @db.Char(36)
+  type            KycDocumentType
+  status          KycStatus       @default(PENDING)
+  /// Bucket privado con cifrado SSE-KMS; acceso solo con URL prefirmada de corta vida
+  s3Bucket        String          @db.VarChar(63)
+  s3Key           String          @unique @db.VarChar(512) /// p. ej. kyc/{userId}/{uuid}.jpg
+  mimeType        String          @db.VarChar(100)
+  sizeBytes       Int
+  sha256          String          @db.Char(64) /// integridad + detección de duplicados
+  rejectionReason String?         @db.VarChar(500)
+  reviewedById    String?         @db.Char(36)
+  reviewedAt      DateTime?
+  expiresAt       DateTime? /// vencimiento del documento de identidad
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  user       User  @relation("KycOwner", fields: [userId], references: [id], onDelete: Cascade)
+  reviewedBy User? @relation("KycReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+
+  @@index([userId, status])
+  @@index([status, createdAt]) // cola de revisión del panel de administración
+  @@index([sha256])
+  @@map("kyc_documents")
+}
+
+// ──────────────────────────────────────────────────────────────────── Chat ──
+
+/// Un hilo por par (vehículo, comprador). El vendedor se desnormaliza para
+/// autorizar en una sola consulta indexada.
+model Conversation {
+  id               String    @id @default(uuid(7)) @db.Char(36)
+  vehicleId        String    @db.Char(36)
+  buyerId          String    @db.Char(36)
+  sellerId         String    @db.Char(36)
+  lastMessageAt    DateTime?
+  buyerLastReadAt  DateTime?
+  sellerLastReadAt DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  vehicle  Vehicle       @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  buyer    User          @relation("ConversationBuyer", fields: [buyerId], references: [id], onDelete: Cascade)
+  seller   User          @relation("ConversationSeller", fields: [sellerId], references: [id], onDelete: Cascade)
+  messages ChatMessage[]
+  reports  Report[]
+
+  @@unique([vehicleId, buyerId])
+  @@index([createdAt, vehicleId, buyerId])
+  @@index([buyerId, lastMessageAt(sort: Desc)])
+  @@index([sellerId, lastMessageAt(sort: Desc)])
+  @@map("conversations")
+}
+
+model ChatMessage {
+  id              String      @id @default(uuid(7)) @db.Char(36)
+  conversationId  String      @db.Char(36)
+  senderId        String      @db.Char(36)
+  /// Idempotencia: el cliente genera este id; los reintentos no duplican mensajes
+  clientId        String      @db.VarChar(64)
+  type            MessageType @default(TEXT)
+  /// Texto (o pie de foto) YA filtrado por el moderador de privacidad y lenguaje
+  body            String?     @db.Text
+  /// Binarios en S3 (subida directa con URL prefirmada); aquí solo metadatos
+  mediaKey        String?     @db.VarChar(512)
+  mediaMimeType   String?     @db.VarChar(100)
+  mediaSizeBytes  Int?
+  durationMs      Int? /// notas de voz y vídeo
+  width           Int?
+  height          Int?
+  /// Array JSON, p. ej. ["EMAIL","PHONE","PROFANITY"] (la app escribe [] por defecto)
+  moderationFlags Json
+  createdAt       DateTime    @default(now())
+  editedAt        DateTime?
+  deletedAt       DateTime?
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@unique([senderId, clientId])
+  @@index([conversationId, createdAt(sort: Desc)])
+  @@map("chat_messages")
+}
+
+// ───────────────────────────────────────────────────── Apartados y reservas ──
+
+model CartReserve {
+  id               String        @id @default(uuid(7)) @db.Char(36)
+  buyerId          String        @db.Char(36)
+  sellerId         String        @db.Char(36)
+  vehicleId        String        @db.Char(36)
+  type             ReserveType   @default(CART)
+  status           ReserveStatus @default(ACTIVE)
+  /// «buyerId:vehicleId» mientras el apartado está ACTIVE; null después
+  cartKey          String?       @unique @db.VarChar(80)
+  /// «buyerId:vehicleId» mientras la reserva está abierta; null al cerrarse
+  openKey          String?       @unique @db.VarChar(80)
+  /// Abono de reserva (instantánea del que fijó el vendedor): el comprador lo paga directamente al
+  /// vendedor, se descuenta del precio y el vendedor debe devolverlo íntegro si la venta no se concreta
+  depositAmount    Decimal?      @db.Decimal(12, 2)
+  /// Precio de la venta concretada: base de la comisión post-venta
+  salePrice        Decimal?      @db.Decimal(12, 2)
+  commissionRate   Decimal?      @db.Decimal(5, 4)
+  commissionAmount Decimal?      @db.Decimal(12, 2)
+  commissionDueAt  DateTime?
+  commissionPaidAt DateTime?
+  currency         String        @default("USD") @db.Char(3)
+  /// Último intento de pago de la comisión con Binance
+  paymentId        String?       @unique @db.Char(36)
+  /// El comprador aceptó el aviso legal (pago P2P, encuentros presenciales, devolución del abono)
+  legalAcceptedAt  DateTime?
+  /// Caducidad: apartado, plazo de respuesta del vendedor o fin del bloqueo de la reserva
+  expiresAt        DateTime?
+  acceptedAt       DateTime?
+  decidedAt        DateTime?
+  cancelledAt      DateTime?
+  completedAt      DateTime?
+  /// El vendedor puso el auto «En negociación» (reserva confirmada y venta en cierre)
+  negotiatingAt    DateTime?
+  cancelledById    String?       @db.Char(36)
+  decisionNote     String?       @db.VarChar(500)
+  createdAt        DateTime      @default(now())
+  updatedAt        DateTime      @updatedAt
+
+  buyer   User          @relation("ReserveBuyer", fields: [buyerId], references: [id], onDelete: Cascade)
+  seller  User          @relation("ReserveSeller", fields: [sellerId], references: [id], onDelete: Cascade)
+  vehicle Vehicle       @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  payment Payment?      @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  ledger  LedgerEntry[]
+  sellerReview SellerReview?
+
+  @@index([buyerId, type, status])
+  @@index([sellerId, type, status])
+  @@index([vehicleId, status])
+  @@index([createdAt, vehicleId, type, status, buyerId])
+  @@index([status, expiresAt]) // jobs de expiración
+  @@index([commissionPaidAt, commissionDueAt]) // comisiones pendientes y vencidas
+  @@map("cart_reserves")
+}
+
+model SellerReview {
+  id            String      @id @default(uuid(7)) @db.Char(36)
+  reservationId String      @unique @db.Char(36)
+  buyerId       String      @db.Char(36)
+  sellerId      String      @db.Char(36)
+  rating        Int         @db.TinyInt
+  /// Comentario opcional del comprador (filtrado por la lista negra)
+  comment       String?     @db.VarChar(400)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  reservation CartReserve @relation(fields: [reservationId], references: [id], onDelete: Cascade)
+  buyer       User        @relation("SellerReviewBuyer", fields: [buyerId], references: [id], onDelete: Cascade)
+  seller      User        @relation("SellerReviewSeller", fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@index([sellerId, createdAt])
+  @@map("seller_reviews")
+}
+
+/// Venta externa o directa: el anuncio solo pasa a SOLD tras confirmar la comisión en Binance.
+model VehicleSale {
+  id              String           @id @default(uuid(7)) @db.Char(36)
+  sellerId        String           @db.Char(36)
+  vehicleId       String           @db.Char(36)
+  paymentId       String?          @unique @db.Char(36)
+  status          VehicleSaleStatus @default(PENDING_PAYMENT)
+  previousStatus  VehicleStatus
+  salePrice       Decimal          @db.Decimal(12, 2)
+  commissionRate  Decimal          @db.Decimal(5, 4)
+  commissionAmount Decimal         @db.Decimal(12, 2)
+  currency        String           @default("USD") @db.Char(3)
+  completedAt     DateTime?
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
+
+  seller  User       @relation(fields: [sellerId], references: [id], onDelete: Restrict)
+  vehicle Vehicle    @relation(fields: [vehicleId], references: [id], onDelete: Restrict)
+  payment Payment?   @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  ledger  LedgerEntry[]
+
+  @@index([sellerId, status, createdAt])
+  @@index([vehicleId, status])
+  @@map("vehicle_sales")
+}
+
+// ─────────────────────────────────────────────────────────── Pagos Binance ──
+
+/**
+ * Un cobro con Binance a la cuenta de la empresa (membresías y comisiones post-venta), en uno de dos modos:
+ * · MERCHANT: orden de Binance Pay (API de comercio) con QR / enlace y confirmación por webhook.
+ * · MANUAL: el usuario paga a nuestro Pay ID con la referencia en la nota y envía el id de la
+ * transacción; un administrador lo verifica. Los reembolsos manuales también los registra él.
+ */
+model Payment {
+  id             String         @id @default(uuid(7)) @db.Char(36)
+  userId         String         @db.Char(36)
+  purpose        PaymentPurpose
+  provider       String         @default("BINANCE") @db.VarChar(20)
+  mode           PaymentMode
+  status         PaymentStatus  @default(PENDING)
+  /// Referencia única: nota del pago (manual) y merchantTradeNo (comercio)
+  reference      String         @unique @db.VarChar(32)
+  /// Orden de Binance Pay (solo modo comercio)
+  prepayId       String?        @unique @db.VarChar(64)
+  checkoutUrl    String?        @db.VarChar(1024)
+  qrcodeLink     String?        @db.VarChar(1024)
+  qrContent      String?        @db.VarChar(1024)
+  deeplink       String?        @db.VarChar(1024)
+  /// Id de la transacción en Binance (lo envía el usuario o llega por webhook). Un id = un pago.
+  txId           String?        @unique @db.VarChar(100)
+  /// Pay ID / Binance ID del pagador: destino de los reembolsos en modo manual
+  payerBinanceId String?        @db.VarChar(64)
+  /// Cuenta de cobro vigente al crear el pago manual: si el administrador la cambia después,
+  /// los pagos abiertos conservan las instrucciones con las que se crearon
+  payeePayId     String?        @db.VarChar(20)
+  payeeName      String?        @db.VarChar(80)
+  amount         Decimal        @db.Decimal(12, 2)
+  currency       String         @default("USDT") @db.VarChar(10)
+  /// Importe pendiente de devolver (reembolso en curso)
+  refundDue      Decimal?       @db.Decimal(12, 2)
+  refundedAmount Decimal        @default(0) @db.Decimal(12, 2)
+  refundTxId     String?        @db.VarChar(100)
+  /// Membresía comprada (purpose = MEMBERSHIP)
+  planCode       PlanCode?
+  cycle          BillingCycle?
+  expiresAt      DateTime?
+  submittedAt    DateTime?
+  paidAt         DateTime?
+  refundedAt     DateTime?
+  reviewedById   String?        @db.Char(36)
+  reviewedAt     DateTime?
+  reviewNote     String?        @db.VarChar(500)
+  failureReason  String?        @db.VarChar(500)
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  user        User              @relation(fields: [userId], references: [id], onDelete: Restrict)
+  reviewedBy  User?             @relation("PaymentReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reservation CartReserve?
+  vehicleSale VehicleSale?
+  membership  MembershipPeriod?
+  boost       Boost?
+  ledger      LedgerEntry[]
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@index([purpose, status, createdAt])
+  @@index([mode, status, createdAt])
+  @@index([status, expiresAt])
+  @@map("payments")
+}
+
+/// Notificaciones de Binance Pay ya procesadas: la PK («bizType:bizId:bizStatus»)
+/// garantiza el procesamiento exactamente una vez.
+model PaymentWebhookEvent {
+  id         String             @id @db.VarChar(64)
+  eventType  String             @db.VarChar(80)
+  resourceId String?            @db.VarChar(64)
+  status     WebhookEventStatus
+  payload    Json
+  error      String?            @db.VarChar(500)
+  receivedAt DateTime           @default(now())
+
+  @@index([eventType, receivedAt])
+  @@map("payment_webhook_events")
+}
+
+/// Libro contable de la plataforma: base de las métricas financieras.
+model LedgerEntry {
+  id            String     @id @default(uuid(7)) @db.Char(36)
+  type          LedgerType
+  amount        Decimal    @db.Decimal(12, 2)
+  currency      String     @default("USD") @db.Char(3)
+  userId        String?    @db.Char(36)
+  reservationId String?    @db.Char(36)
+  vehicleSaleId String?    @db.Char(36)
+  paymentId     String?    @db.Char(36)
+  description   String     @db.VarChar(200)
+  occurredAt    DateTime   @default(now())
+
+  user        User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  reservation CartReserve? @relation(fields: [reservationId], references: [id], onDelete: SetNull)
+  vehicleSale VehicleSale? @relation(fields: [vehicleSaleId], references: [id], onDelete: SetNull)
+  payment     Payment?     @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@unique([type, reservationId])
+  @@unique([type, vehicleSaleId])
+  @@index([type, occurredAt])
+  @@index([occurredAt])
+  @@map("ledger_entries")
+}
+
+// ──────────────────────────────────────────────────── Moderación y vitrina ──
+
+/// Lista negra global de términos (chat, títulos, descripciones, comentarios).
+model BlockedTerm {
+  id        String   @id @default(uuid(7)) @db.Char(36)
+  term      String   @unique @db.VarChar(80)
+  createdAt DateTime @default(now())
+
+  @@map("blocked_terms")
+}
+
+/// Qué se denuncia: un anuncio, una conversación del chat (a la otra persona) o un perfil.
+enum ReportKind {
+  VEHICLE
+  CHAT
+  USER
+}
+
+model Report {
+  id             String       @id @default(uuid(7)) @db.Char(36)
+  kind           ReportKind   @default(VEHICLE)
+  /// Anuncio denunciado o el auto de la conversación; null en denuncias de un perfil
+  vehicleId      String?      @db.Char(36)
+  /// Solo en denuncias del chat: la conversación y la persona denunciada
+  conversationId String?      @db.Char(36)
+  reportedUserId String?      @db.Char(36)
+  /// Una denuncia por autor y objeto: «V:vehículo:autor», «C:conversación:autor» o «U:perfil:autor»
+  dedupeKey      String       @unique @db.VarChar(90)
+  reporterId     String       @db.Char(36)
+  reason         ReportReason
+  details        String?      @db.VarChar(2000)
+  status         ReportStatus @default(OPEN)
+  resolutionNote String?      @db.VarChar(500)
+  resolvedById   String?      @db.Char(36)
+  resolvedAt     DateTime?
+  createdAt      DateTime     @default(now())
+
+  vehicle      Vehicle?      @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  reportedUser User?         @relation("ReportTarget", fields: [reportedUserId], references: [id], onDelete: Cascade)
+  reporter     User          @relation("ReportAuthor", fields: [reporterId], references: [id], onDelete: Cascade)
+  resolvedBy   User?         @relation("ReportResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+
+  @@index([vehicleId])
+  @@index([conversationId])
+  @@index([reportedUserId])
+  @@index([status, createdAt])
+  @@map("reports")
+}
+
+/// Reseñas de la plataforma (testimonios de la landing tras moderación).
+model Review {
+  id            String       @id @default(uuid(7)) @db.Char(36)
+  userId        String       @unique @db.Char(36)
+  rating        Int          @db.TinyInt
+  comment       String       @db.VarChar(1000)
+  status        ReviewStatus @default(PENDING)
+  moderatedById String?      @db.Char(36)
+  moderatedAt   DateTime?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  user        User  @relation("ReviewAuthor", fields: [userId], references: [id], onDelete: Cascade)
+  moderatedBy User? @relation("ReviewModerator", fields: [moderatedById], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt(sort: Desc)])
+  @@map("reviews")
+}
+
+model ContactMessage {
+  id        String        @id @default(uuid(7)) @db.Char(36)
+  userId    String?       @db.Char(36)
+  name      String        @db.VarChar(120)
+  email     String        @db.VarChar(254)
+  subject   String?       @db.VarChar(160)
+  message   String        @db.Text
+  status    ContactStatus @default(NEW)
+  ip        String?       @db.VarChar(45)
+  createdAt DateTime      @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@map("contact_messages")
+}
+
+// ─────────────────────────────────────────────────── Notificaciones y correo ──
+
+model Notification {
+  id        String    @id @default(uuid(7)) @db.Char(36)
+  userId    String    @db.Char(36)
+  type      String    @db.VarChar(40)
+  title     String    @db.VarChar(160)
+  body      String    @db.VarChar(500)
+  link      String?   @db.VarChar(300)
+  /// Evita duplicados en avisos programados (p. ej. «membresía vence en 10 días»)
+  dedupeKey String?   @unique @db.VarChar(160)
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("notifications")
+}
+
+/// Bandeja de salida transaccional: el correo se encola en la misma transacción
+/// que el cambio de negocio y un worker lo envía con reintentos.
+model EmailOutbox {
+  id        String      @id @default(uuid(7)) @db.Char(36)
+  toEmail   String      @db.VarChar(254)
+  subject   String      @db.VarChar(200)
+  html      String      @db.MediumText
+  text      String      @db.Text
+  status    EmailStatus @default(PENDING)
+  attempts  Int         @default(0) @db.SmallInt
+  lastError String?     @db.VarChar(500)
+  sendAfter DateTime    @default(now())
+  sentAt    DateTime?
+  createdAt DateTime    @default(now())
+
+  @@index([status, sendAfter])
+  @@map("email_outbox")
+}
+
+// ─────────────────────────────────────────────────────────────── Auditoría ──
+
+/// Registro de solo inserción de acciones sensibles (KYC, pagos, membresías,
+/// moderación) para cumplimiento y soporte.
+model AuditLog {
+  id         String   @id @default(uuid(7)) @db.Char(36)
+  actorId    String?  @db.Char(36) /// null = acción del sistema (webhooks, jobs)
+  action     String   @db.VarChar(64)
+  entityType String   @db.VarChar(40)
+  entityId   String   @db.VarChar(64)
+  metadata   Json?
+  ip         String?  @db.VarChar(45)
+  createdAt  DateTime @default(now())
+
+  actor User? @relation(fields: [actorId], references: [id], onDelete: SetNull)
+
+  @@index([entityType, entityId, createdAt(sort: Desc)])
+  @@index([actorId, createdAt(sort: Desc)])
+  @@map("audit_logs")
+}
+
+/// «Avísame si vuelve»: quien espera un auto en negociación (reservado). Al liberarse la
+/// reserva sin venta se le avisa y el registro se borra; si se vende, también se borra.
+model VehicleWatch {
+  userId    String   @db.Char(36)
+  vehicleId String   @db.Char(36)
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, vehicleId])
+  @@index([vehicleId])
+  @@map("vehicle_watches")
+}
+
+/// «Guardar» en la ficha: autos guardados de cada persona. `savedPrice` es el precio al guardarlo
+/// (para «Bajó $600 desde que lo guardaste»); si el vendedor lo baja, se avisa a quien lo guardó.
+model VehicleFavorite {
+  userId     String   @db.Char(36)
+  vehicleId  String   @db.Char(36)
+  savedPrice Decimal  @db.Decimal(12, 2)
+  createdAt  DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, vehicleId])
+  @@index([vehicleId])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("vehicle_favorites")
+}
+
+enum AlertFrequency {
+  INSTANT
+  DAILY
+  WEEKLY
+}
+
+/// «Mis alertas»: búsqueda guardada que avisa cuando se publica un auto que la cumple
+/// (al instante, o en un resumen diario o semanal).
+model SearchAlert {
+  id             String         @id @default(uuid(7)) @db.Char(36)
+  userId         String         @db.Char(36)
+  make           String?        @db.VarChar(60)
+  model          String?        @db.VarChar(80)
+  maxPrice       Decimal?       @db.Decimal(12, 2)
+  country        String?        @db.Char(2)
+  city           String?        @db.VarChar(80)
+  yearFrom       Int?           @db.SmallInt
+  frequency      AlertFrequency @default(INSTANT)
+  active         Boolean        @default(true)
+  /// Hasta dónde ya se revisaron publicaciones nuevas (motor de coincidencias)
+  lastCheckedAt  DateTime       @default(now())
+  /// Último resumen enviado (diario / semanal)
+  lastNotifiedAt DateTime?
+  /// La persona vio los autos de la alerta: los «nuevos» se cuentan desde aquí
+  lastSeenAt     DateTime       @default(now())
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([active, lastCheckedAt])
+  @@map("search_alerts")
+}
+
+/// «Seguir» a un concesionario aliado: avisa cuando publica un auto.
+model DealerFollow {
+  userId    String   @db.Char(36)
+  dealerId  String   @db.Char(36)
+  createdAt DateTime @default(now())
+
+  user   User @relation("DealerFollower", fields: [userId], references: [id], onDelete: Cascade)
+  dealer User @relation("DealerFollowed", fields: [dealerId], references: [id], onDelete: Cascade)
+
+  @@id([userId, dealerId])
+  @@index([dealerId])
+  @@map("dealer_follows")
+}
+
+/// Vistas de un anuncio por día (calendario de Venezuela): cuenta una vez por persona y día.
+model VehicleViewDay {
+  vehicleId String   @db.Char(36)
+  day       DateTime @db.Date
+  views     Int      @default(0) @db.UnsignedInt
+
+  vehicle Vehicle @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+
+  @@id([vehicleId, day])
+  @@index([day])
+  @@map("vehicle_view_days")
+}
+
+/// Impulso pagado de «Destacar»: 3 o 7 días en su zona (ciudad × tipo), Portada nacional
+/// o la pantalla de entrada (carrusel de Entrar y Crear cuenta, 1 a 3 días por orden de llegada).
+enum BoostKind {
+  CITY_3D
+  CITY_7D
+  HOME
+  LOGIN
+}
+
+/// PENDING_PAYMENT → (pago confirmado) SCHEDULED / ACTIVE → EXPIRED · WAITLISTED: zona llena, sin pago
+enum BoostStatus {
+  PENDING_PAYMENT
+  WAITLISTED
+  SCHEDULED
+  ACTIVE
+  EXPIRED
+  CANCELLED
+}
+
+model Boost {
+  id          String      @id @default(uuid(7)) @db.Char(36)
+  userId      String      @db.Char(36)
+  vehicleId   String      @db.Char(36)
+  kind        BoostKind
+  /// Días comprados: 3 o 7 (zona y portada) · 1 a 3 seguidos (pantalla de entrada)
+  days        Int         @db.SmallInt
+  /// Zona de los impulsos de ciudad: «VE:caracas:SUV» (país, ciudad normalizada y tipo de auto)
+  zoneKey     String?     @db.VarChar(120)
+  status      BoostStatus @default(PENDING_PAYMENT)
+  amount      Decimal     @db.Decimal(10, 2)
+  paymentId   String?     @unique @db.Char(36)
+  /// Hora del pago confirmado: da el orden de llegada (turno) en la pantalla de entrada
+  paidAt      DateTime?
+  /// Zona y portada: inicio y fin exactos (el fin es el featuredUntil del anuncio)
+  startsAt    DateTime?
+  endsAt      DateTime?
+  /// Pantalla de entrada: día pedido y días asignados (calendario de Venezuela, America/Caracas)
+  wantDate    DateTime?   @db.Date
+  startDate   DateTime?   @db.Date
+  endDate     DateTime?   @db.Date
+  /// Turno por orden de llegada (pantalla de entrada) y si se corrió porque el día pedido estaba lleno
+  turn        Int?
+  moved       Boolean     @default(false)
+  /// Lista de espera: cuándo le avisamos que se abrió un cupo
+  notifiedAt  DateTime?
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  user    User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vehicle Vehicle  @relation(fields: [vehicleId], references: [id], onDelete: Cascade)
+  payment Payment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  @@index([kind, status, endsAt])
+  @@index([kind, status, startDate, endDate])
+  @@index([zoneKey, status])
+  @@index([vehicleId, status])
+  @@index([userId, status])
+  @@map("boosts")
+}

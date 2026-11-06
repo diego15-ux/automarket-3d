@@ -1,0 +1,19 @@
+# AutoMarket 3D · HTTPS automático. Caddy pide y renueva los certificados solo.
+# Los dos nombres (dominio y media.dominio) deben apuntar a la IP del servidor.
+{$DOMINIO} {
+	encode zstd gzip
+
+	# La API y el chat en vivo van directo a la API; todo lo demás es la página.
+	@api path /api/* /socket.io/*
+	handle @api {
+		reverse_proxy api:4000
+	}
+	handle {
+		reverse_proxy web:3000
+	}
+}
+
+# Fotos, vídeos y documentos (subidas directas con enlaces firmados).
+media.{$DOMINIO} {
+	reverse_proxy minio:9000
+}

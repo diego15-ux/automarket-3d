@@ -1,0 +1,76 @@
+# AutoMarket 3D · lo que NO se sube a GitHub
+# Regla: se sube el código y las herramientas. No se suben claves, datos de usuarios,
+# fotos subidas ni lo que se vuelve a crear con «npm install» o al compilar.
+
+# ── Claves y contraseñas (NUNCA al repositorio) ─────────────────────────────
+.env
+.env.*
+!.env.example
+deploy/.env
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+
+# ── Datos de la base y copias (traen correos, claves cifradas y datos de usuarios) ──
+respaldos/
+copias-del-proyecto/
+para-el-servidor/
+deploy/respaldos/
+database/
+*.sql.gz
+*.dump
+# Las migraciones (apps/api/prisma/migrations/*/migration.sql) y apps/api/prisma/sql/ SÍ se suben.
+
+# ── Fotos, documentos de KYC y base local de desarrollo ─────────────────────
+.dev-s3/
+.dev-db/
+
+# ── Dependencias (se instalan con «npm install») ────────────────────────────
+node_modules/
+.npm/
+
+# ── Compilaciones y archivos generados ──────────────────────────────────────
+dist/
+.next/
+out/
+build/
+next-env.d.ts
+*.tsbuildinfo
+apps/api/src/generated/
+.turbo/
+.eslintcache
+
+# ── Registros y temporales ──────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+tmp/
+.tmp/
+*.tmp
+scripts/parches-respaldo/
+
+# ── Pruebas ─────────────────────────────────────────────────────────────────
+coverage/
+playwright-report/
+test-results/
+
+# ── Editores ────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Windows y Mac ───────────────────────────────────────────────────────────
+Thumbs.db
+ehthumbs.db
+desktop.ini
+$RECYCLE.BIN/
+.DS_Store
+
+# AutoMarket.exe sí se sube (es el lanzador de doble clic). Se puede volver a compilar
+# desde scripts/launcher; si prefieres no subirlo, quita el # de la línea siguiente:
+# AutoMarket.exe

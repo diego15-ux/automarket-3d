@@ -1,0 +1,113 @@
+'use client';
+
+import { usdText } from '@automarket/contracts';
+import type { SmartSearchDTO, VehicleCardDTO } from '@automarket/contracts';
+import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { MediaImage } from '@/shared/ui/media-image';
+import { vehicleKeys, vehiclesApi } from './api';
+
+/** Piezas comunes del buscador inteligente (cabecera en PC y pantalla completa en el teléfono). */
+
+const RECENT_KEY = 'am-recent-searches';
+
+/** Búsquedas recientes de este navegador (no salen del dispositivo). */
+export function readRecent(): string[] {
+  try {
+    const value = JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]');
+    return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string').slice(0, 5) : [];
+  } catch {
+    return [];
+  }
+}
+export function saveRecent(text: string) {
+  const clean = text.trim();
+  if (clean.length < 2) return;
+  try {
+    const next = [clean, ...readRecent().filter(item => item.toLowerCase() !== clean.toLowerCase())].slice(0, 5);
+    localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+  } catch {
+    // Sin almacenamiento (modo privado): no se guardan recientes.
+  }
+}
+
+/** Respuesta del servidor ~200 ms después de la última tecla; mientras, se ve la anterior. */
+export function useSmartSearch(q: string, limit: number) {
+  const [term, setTerm] = useState(q.trim());
+  useEffect(() => {
+    const timer = setTimeout(() => setTerm(q.trim()), 200);
+    return () => clearTimeout(timer);
+  }, [q]);
+  const query = useQuery({
+    queryKey: vehicleKeys.smart(term, limit),
+    queryFn: ({ signal }) => vehiclesApi.smart(term, limit, signal),
+    enabled: term.length > 0,
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,
+  });
+  return { data: term.length > 0 ? query.data : undefined, loading: query.isFetching && !query.data, term };
+}
+
+export function useSmartStart(enabled: boolean) {
+  return useQuery({ queryKey: vehicleKeys.smartStart, queryFn: vehiclesApi.smartStart, enabled, staleTime: 5 * 60_000 });
+}
+
+/** «/vehiculos?…» con los mismos filtros que entendió el buscador. */
+export const catalogHref = (data: SmartSearchDTO | undefined, q: string) => {
+  if (!data) return q.trim() ? `/vehiculos?${new URLSearchParams({ q: q.trim() })}` : '/vehiculos';
+  const params = new URLSearchParams(data.catalog);
+  return params.size ? `/vehiculos?${params}` : '/vehiculos';
+};
+
+/** Reemplaza la última palabra por la sugerida y deja un espacio para seguir escribiendo. */
+export const applySuggestion = (q: string, word: string) => `${q.replace(/([^\s]+)$/, '')}${word} `;
+
+export const usd = (value: number | string) => usdText(Number(value));
+export const kmText = (km: number) => (km === 0 ? '0 km' : `${km.toLocaleString('es-VE')} km`);
+export const gearboxText = (v: Pick<VehicleCardDTO, 'transmission'>) => (v.transmission === 'MANUAL' ? 'Sincrónico' : 'Automático');
+export const titleOf = (v: Pick<VehicleCardDTO, 'make' | 'model' | 'version' | 'year'>) => [v.make, v.model, v.version, v.year].filter(Boolean).join(' ');
+
+const SHAPES = {
+  sedan: { body: 'M20 100c0-12 8-18 22-20l46-7c14-16 36-28 64-30h56c20 0 38 10 56 28l30 6c14 3 20 10 20 22v6c0 4-3 6-7 6h-19a28 28 0 0 0-54 0H107a28 28 0 0 0-54 0H27c-4 0-7-2-7-6z', glassA: 'M100 73c12-14 28-22 50-23h18v23z', glassB: 'M176 50h28c18 0 32 8 46 22l-74 1z', w1: 80, w2: 261 },
+  suv: { body: 'M18 98c0-12 6-18 18-20l34-6 28-34c4-5 10-8 18-8h120c10 0 16 4 20 12l16 30 28 5c12 2 18 9 18 21v7c0 4-3 6-7 6h-17a28 28 0 0 0-54 0H107a28 28 0 0 0-54 0H25c-4 0-7-2-7-6z', glassA: 'M84 72l22-27c3-4 7-6 12-6h46v33z', glassB: 'M172 39h58c6 0 10 3 13 8l14 25h-85z', w1: 80, w2: 267 },
+  pickup: { body: 'M16 98c0-12 6-18 18-20l36-6 26-30c4-5 9-7 16-7h66c8 0 12 3 14 9l10 28h116c6 0 10 4 10 10v23c0 4-3 6-7 6h-15a28 28 0 0 0-54 0H105a28 28 0 0 0-54 0H23c-4 0-7-2-7-6z', glassA: 'M84 72l20-25c3-4 7-5 11-5h27v30z', glassB: 'M150 42h24c5 0 8 2 10 6l9 24h-43z', w1: 78, w2: 279 },
+};
+const PAINTS = ['#3A4452', '#9E2A2B', '#2F4A7A', '#55684F', '#8A8F94', '#B4402F', '#1C1D1F', '#6B7F8F', '#C9A227', '#E9E7E2'];
+
+/** Foto real del anuncio; si no tiene, la silueta de su tipo de auto. */
+export function ResultThumb({ vehicle, index, className, wheel = '#16181b' }: { vehicle: VehicleCardDTO; index: number; className: string; wheel?: string }) {
+  if (vehicle.coverUrl) {
+    return (
+      <span className={`relative block overflow-hidden ${className}`}>
+        <MediaImage src={vehicle.coverUrl} alt="" fill sizes="96px" className="object-cover" />
+      </span>
+    );
+  }
+  const shape = vehicle.category === 'PICKUP' ? SHAPES.pickup : vehicle.category === 'SUV' ? SHAPES.suv : SHAPES.sedan;
+  return (
+    <span className={`grid place-items-center ${className}`}>
+      <svg viewBox="0 0 360 140" className="w-[86%]" aria-hidden="true">
+        <path d={shape.body} fill={PAINTS[index % PAINTS.length]} />
+        <path d={shape.glassA} fill="#A9B0B8" />
+        <path d={shape.glassB} fill="#A9B0B8" />
+        <circle cx={shape.w1} cy="106" r="20" fill={wheel} />
+        <circle cx={shape.w2} cy="106" r="20" fill={wheel} />
+      </svg>
+    </span>
+  );
+}
+
+export const ICON = {
+  search: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4',
+  close: 'M6 6l12 12M18 6L6 18',
+  clock: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 7v5l3 2',
+  check: 'M5 12.5l4.5 4.5L19 7.5',
+  back: 'M15 6l-6 6 6 6',
+};
+export function Icon({ d, size = 16, stroke = 2, className }: { d: string; size?: number; stroke?: number; className?: string }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className={className}>
+      <path d={d} />
+    </svg>
+  );
+}

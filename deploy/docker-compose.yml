@@ -1,0 +1,172 @@
+# AutoMarket 3D · producción en un solo servidor (Linux con Docker).
+# Lee las claves de deploy/.env (copia env.ejemplo a .env y llénalo). Guía: GUIA.md.
+#
+#   docker compose up -d --build     arrancar o actualizar
+#   docker compose logs -f api       ver qué pasa en la API
+#   docker compose down              apagar (los datos se quedan en los volúmenes)
+name: automarket
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  db:
+    <<: *restart
+    # MariaDB, el mismo motor de XAMPP: así una copia de tu PC se carga tal cual.
+    image: mariadb:11.4
+    command: [--character-set-server=utf8mb4, --collation-server=utf8mb4_unicode_ci, --default-time-zone=+00:00]
+    environment:
+      MARIADB_DATABASE: automarket
+      MARIADB_USER: automarket
+      MARIADB_PASSWORD: ${MYSQL_PASSWORD:?Falta MYSQL_PASSWORD en deploy/.env}
+      MARIADB_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?Falta MYSQL_ROOT_PASSWORD en deploy/.env}
+    volumes:
+      - mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  redis:
+    <<: *restart
+    image: redis:7-alpine
+    command: [redis-server, --appendonly, "yes"]
+    volumes:
+      - redis:/data
+
+  # Almacén de fotos, vídeos, chats y documentos (compatible con S3).
+  minio:
+    <<: *restart
+    image: minio/minio:latest
+    command: [server, /data]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:?Falta MINIO_ROOT_USER en deploy/.env}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:?Falta MINIO_ROOT_PASSWORD en deploy/.env}
+    volumes:
+      - minio:/data
+
+  # Crea los buckets una vez y deja públicas solo las fotos de anuncios, perfiles y portada.
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      - minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - ./minio-init.sh:/minio-init.sh:ro
+    entrypoint: [sh, /minio-init.sh]
+
+  api:
+    <<: *restart
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: api
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    environment:
+      NODE_ENV: production
+      PORT: "4000"
+      TRUST_PROXY: "1"
+      WEB_URL: https://${DOMINIO:?Falta DOMINIO en deploy/.env}
+      API_PUBLIC_URL: https://${DOMINIO}
+      CORS_ORIGINS: https://${DOMINIO}
+      COOKIE_SECURE: "true"
+      DATABASE_URL: mysql://automarket:${MYSQL_PASSWORD}@db:3306/automarket
+      REDIS_URL: redis://redis:6379
+      JWT_ACCESS_SECRET: ${JWT_ACCESS_SECRET:?Falta JWT_ACCESS_SECRET en deploy/.env}
+      ADMIN_ONE_EMAIL: ${ADMIN_ONE_EMAIL:-}
+      SMTP_URL: ${SMTP_URL:-}
+      MAIL_DISABLED: ${MAIL_DISABLED:-false}
+      MAIL_FROM: ${MAIL_FROM:-AutoMarket <no-reply@automarket.dev>}
+      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:-}
+      TURNSTILE_DISABLED: ${TURNSTILE_DISABLED:-false}
+      GOOGLE_CLIENT_IDS: ${GOOGLE_CLIENT_ID:-}
+      BINANCE_PAY_ID: ${BINANCE_PAY_ID:-}
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      S3_ENDPOINT: https://media.${DOMINIO}
+      S3_BUCKET_MEDIA: automarket-media
+      S3_BUCKET_KYC: automarket-kyc
+      MEDIA_PUBLIC_BASE_URL: https://media.${DOMINIO}/automarket-media
+
+  web:
+    <<: *restart
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      target: web
+      args:
+        NEXT_PUBLIC_API_URL: https://${DOMINIO}
+        NEXT_PUBLIC_MEDIA_HOST: media.${DOMINIO}
+        NEXT_PUBLIC_TURNSTILE_SITE_KEY: ${TURNSTILE_SITE_KEY:-}
+        NEXT_PUBLIC_GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+    depends_on:
+      - api
+    environment:
+      API_URL: http://api:4000
+
+  # HTTPS automático (Let's Encrypt) para el dominio y media.dominio.
+  caddy:
+    <<: *restart
+    image: caddy:2-alpine
+    depends_on:
+      - web
+      - api
+      - minio
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      DOMINIO: ${DOMINIO}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      default:
+        # La API firma y revisa las fotos en https://media.<dominio>: así lo encuentra sin salir a internet.
+        aliases:
+          - media.${DOMINIO}
+
+  # Copia de la base todos los días en deploy/respaldos (se guardan las últimas 30).
+  backup:
+    <<: *restart
+    image: mariadb:11.4
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      MYSQL_PWD: ${MYSQL_PASSWORD}
+    volumes:
+      - ./respaldos:/respaldos
+    entrypoint:
+      - sh
+      - -c
+      - |
+        while true; do
+          f=/respaldos/automarket-$$(date +%F_%H-%M).sql.gz
+          if mariadb-dump -h db -u automarket --single-transaction --routines --triggers --hex-blob automarket | gzip > "$$f"; then
+            echo "copia lista: $$f"
+          else
+            echo "la copia falló"; rm -f "$$f"
+          fi
+          ls -1t /respaldos/automarket-*.sql.gz 2>/dev/null | tail -n +31 | xargs -r rm -f
+          sleep 86400
+        done
+
+volumes:
+  mysql:
+  redis:
+  minio:
+  caddy-data:
+  caddy-config:

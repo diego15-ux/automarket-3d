@@ -1,0 +1,46 @@
+[
+  {
+    "archivo": "apps/web/src/app/(platform)/cuenta/reservas/page.tsx",
+    "cambios": [
+      {
+        "antes": "title=\"Reservas con depósito\"",
+        "despues": "title=\"Mis reservas\""
+      },
+      {
+        "antes": "description=\"El comprador paga el 2 % con Binance y el vendedor decide: al aceptar, el vehículo queda bloqueado hasta concluir la venta o cancelarla formalmente; si no acepta, el depósito se devuelve.\"",
+        "despues": "description=\"Pides la reserva y el vendedor la confirma. El abono lo fija el vendedor y se lo pagas directamente a él: AutoMarket no lo cobra ni lo guarda. Si la reserva se cancela, el vendedor devuelve el 100 %.\""
+      }
+    ]
+  },
+  {
+    "archivo": "apps/web/src/app/(platform)/admin/carrusel/page.tsx",
+    "cambios": [
+      {
+        "antes": "los destacados de los planes Medio y Pro aparecen después.",
+        "despues": "los destacados de los planes Concesionario Básico y Pro aparecen después."
+      }
+    ]
+  },
+  {
+    "archivo": "apps/web/src/app/(platform)/admin/moderacion/page.tsx",
+    "cambios": [
+      {
+        "antes": "description=\"Denuncias, reseñas, lista negra global de términos y mensajes de contacto.\"",
+        "despues": "description=\"Reseñas por aprobar y mensajes del formulario de contacto.\""
+      }
+    ]
+  },
+  {
+    "archivo": "apps/web/src/app/(platform)/admin/sitio/page.tsx",
+    "cambios": [
+      {
+        "antes": "title: 'Login y Términos'",
+        "despues": "title: 'Portada, login y Términos'"
+      },
+      {
+        "antes": "el fondo del login (se guardan en MySQL) y el editor",
+        "despues": "el fondo del login y el editor"
+      }
+    ]
+  }
+]
