@@ -1,13 +1,15 @@
 # AutoMarket 3D — Arquitectura técnica
 
+> Escrito el 31 oct 2026 y corregido el 09 nov 2026. Para arrancar el proyecto y ver lo que hay hoy, lee primero el [README](README.md). Desde que se escribió: se quitó la vista 3D, el login usa una foto de fondo simple, la base se crea solo con las migraciones de Prisma y las comisiones dependen del plan (Gratis 5 %, Premium 2,5 %, Básico 2 %, Pro 0 %).
+
 Marketplace automotriz para **personas naturales y concesionarios** (toda cuenta compra, reserva y
 publica), con verificación estricta de identidad, publicación gratuita con cupo limitado,
 **reservas P2P** (el abono va directamente al vendedor) confirmadas por el vendedor, planes y
 comisión post-venta cobrados con **Binance**, chat con emojis y notas de voz, base de datos
 persistente en **MySQL / MariaDB (XAMPP)**, búsqueda priorizada por ubicación, panel de
-administración y showroom 3D.
+administración.
 
-Flujo por fases: **1)** landing pública → **2)** acceso (login de cristal con fondo dinámico desde
+Flujo por fases: **1)** landing pública → **2)** acceso (login con la foto de fondo que se sube desde
 el panel) → **3)** aplicación privada (catálogo, reservas, chat, verificación).
 
 ---
@@ -18,10 +20,9 @@ el panel) → **3)** aplicación privada (catálogo, reservas, chat, verificaci�
 flowchart LR
   subgraph Cliente
     WEB["Next.js 16 · React 19<br/>Tailwind 4 · tema día/noche"]
-    R3F["Visor 3D<br/>R3F 9 + drei 10"]
   end
 
-  CDN[("CDN / S3 público<br/>fotos · vídeos · GLB")]
+  CDN[("CDN / S3 público<br/>fotos · vídeos")]
   API["API Express 5<br/>REST /api/*"]
   WS["Socket.io 4<br/>chat · avisos · /public"]
   DB[("MySQL 8 / MariaDB 10.4 (XAMPP)<br/>Prisma 7 + adapter mariadb")]
@@ -37,7 +38,6 @@ flowchart LR
   WEB -- "WebSocket" --> WS
   WEB -- "PUT prefirmado" --> S3
   WEB -- "QR · enlace de pago · Pay ID" --> BN
-  R3F --> CDN
   API --> DB
   API --> REDIS
   API -- "órdenes · consulta · cierre · reembolso (HMAC-SHA512)" --> BN
@@ -68,7 +68,6 @@ flowchart LR
 | Capa | Paquetes | Versión |
 |---|---|---|
 | Web | `next` · `react` · `tailwindcss` · `@tanstack/react-query` · `recharts` | 16.4 · 19.3 · 4.3 · 5.105 · 3.10 |
-| 3D | `three` · `@react-three/fiber` · `@react-three/drei` | 0.186 · 9.8 · 10.7 |
 | API | `express` · `socket.io` · `zod` · `jose` · `@node-rs/argon2` · `nodemailer` · `exceljs` · `pdfkit` · `redis` | 5.3 · 4.8 · 4.6 · 6.2 · 2.2 · 10.3 · 4.4 · 0.20 · 6.3 |
 | Datos | `prisma` / `@prisma/client` / `@prisma/adapter-mariadb` · `mariadb` · MySQL · MariaDB (XAMPP) | 7.10 · 3.5 · 8.4 LTS · 10.4.32 |
 | TypeScript | API: 7 (compilador nativo) · web y contracts: 6 | 7.0 · 6.0 |
@@ -81,8 +80,7 @@ flowchart LR
 automarket-3d/
 ├─ package.json                 # workspaces: packages/*, apps/* (license: UNLICENSED)
 ├─ LICENSE                      # licencia propietaria: todos los derechos reservados
-├─ database/automarket3d.sql    # esquema completo para importar en XAMPP (phpMyAdmin o mysql.exe)
-├─ docker-compose.yml           # MySQL 8.4 · Redis 7 · Mailpit (SMTP de desarrollo)
+├─ deploy/                      # servidor: Docker, Caddy (HTTPS), instalar.sh y GUIA.md
 ├─ packages/
 │  └─ contracts/                # @automarket/contracts (compilado a dist/)
 │     └─ src/ enums · geo (países, ciudad normalizada) · labels · auth · vehicles
@@ -91,7 +89,7 @@ automarket-3d/
 │  ├─ api/
 │  │  ├─ prisma/ schema.prisma · migrations/ · sql/constraints.sql · seed.ts
 │  │  ├─ scripts/ dev-db.mjs (MySQL sin Docker) · dev-s3.mjs (S3 local)
-│  │  ├─ test/ e2e.mjs (220 comprobaciones) · fakes.mjs (Binance Pay, Turnstile, S3, SMTP)
+│  │  ├─ test/ e2e.mjs (más de 500 comprobaciones) · fakes.mjs (Binance Pay, Turnstile, S3, SMTP)
 │  │  └─ src/
 │  │     ├─ config/env.ts                 # validación fail-fast (obligatorios en producción)
 │  │     ├─ jobs/scheduler.ts             # tareas periódicas bajo GET_LOCK
@@ -120,7 +118,7 @@ automarket-3d/
 │        │        (platform)/ vehiculos · cuenta/{anuncios,plan,reservas,perfil,verificacion}
 │        │                    mensajes · pagos/[id] · admin/* (pagos, comisiones, sitio…)
 │        ├─ features/ landing · auth · vehicles · reservations · memberships · payments · admin
-│        │            notifications · chat · kyc · showroom-3d
+│        │            notifications · chat · kyc · boosts · copilot · dealers
 │        ├─ shared/ ui (theme-toggle, turnstile, media-image…) · lib (http, session, format)
 │        └─ proxy.ts                       # rutas privadas → /login?next=
 ```
@@ -134,9 +132,10 @@ automarket-3d/
   configuración del pool (`?ssl=true`, `connectionLimit`) y `shared/infra/prisma.ts` crea el
   cliente con `@prisma/adapter-mariadb`. Los datos persisten en `C:\xampp\mysql\data\automarket3d`.
 - **Base propia `automarket3d`** (utf8mb4): no toca otras bases del mismo servidor.
-- **`database/automarket3d.sql`**: el esquema completo (tablas, claves, índices y CHECKs) con el
-  catálogo inicial (planes, ajustes, lista negra) y el registro de la migración, para importar en
-  phpMyAdmin o con `mysql.exe`. No incluye usuarios ni vehículos de ejemplo (los crea el seed).
+- **Tablas**: las crean las migraciones de Prisma (`apps/api/prisma/migrations/`, con
+  `npm run db:deploy -w @automarket/api` o al abrir `AutoMarket.exe`). El catálogo inicial (planes,
+  ajustes, lista negra) lo pone `npm run db:seed -w @automarket/api`. No se crean usuarios ni autos
+  de ejemplo.
 - **PK UUID v7 en `CHAR(36)`**: ordenables en el tiempo (buena localidad en InnoDB). Cuando el id
   debe existir antes de insertar (va en las URL de retorno de Binance Pay) se genera con `uuidv7()`.
 - **24 tablas**: identidad (`users`, `oauth_accounts`, `refresh_tokens`, `password_reset_tokens`),
@@ -277,7 +276,7 @@ Binance se usa **solo para lo que cobra la plataforma**: membresías y comisione
 Modo **día/noche** (preferencia guardada; por defecto la del sistema, sin parpadeo), buscador con país, **contadores en vivo** de usuarios y autos publicados (valor inicial desde MySQL + actualizaciones por Socket.io `/public`), **carrusel controlado desde el panel**, cómo funciona, planes con precios reales (personas naturales / concesionarios), **testimonios** (reseñas aprobadas con media real) y **formulario de contacto** con Turnstile.
 
 - **Fase 1 · landing pública**: comprar o vender lleva al login (el catálogo y las fichas son privados, `proxy.ts`).
-- **Fase 2 · acceso**: login, registro y recuperación en una tarjeta de cristal (glassmorphism) sobre el **fondo dinámico** que el administrador sube desde el panel (sin imagen: degradado de marca).
+- **Fase 2 · acceso**: login, registro y recuperación sobre la **foto de fondo** que el administrador sube desde el panel (sin foto: la predeterminada de `public/fondos/`).
 - **Fase 3 · aplicación privada**: catálogo, reservas, chat (emojis, fotos, vídeo y notas de voz en el chat directo) y verificación.
 - **Derechos de autor**: pie de página de la landing, el acceso y la aplicación con «© Todos los derechos reservados. Sistema desarrollado bajo licencia exclusiva del propietario de la plataforma.»; cabecera en el código (`/*! … */`), `LICENSE` propietaria, `"license": "UNLICENSED"` en los paquetes, meta `copyright` y, en producción, sin mapas de código fuente ni cabecera `X-Powered-By`. El código que se ejecuta en el navegador siempre puede verse: la protección real es la licencia y que la lógica de negocio vive en la API.
 
@@ -299,8 +298,8 @@ cp apps/api/.env.example apps/api/.env          # ya apunta a mysql://root@127.0
 cp apps/web/.env.example apps/web/.env.local
 C:/xampp/mysql/bin/mysql.exe -u root -e "CREATE DATABASE IF NOT EXISTS automarket3d CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
 npm run db:generate -w @automarket/api
-npm run db:deploy -w @automarket/api   # crea las tablas (equivale a importar database/automarket3d.sql)
-npm run db:seed -w @automarket/api     # planes, ajustes, lista negra y datos de ejemplo
+npm run db:deploy -w @automarket/api   # crea las tablas
+npm run db:seed -w @automarket/api     # planes, ajustes y lista negra
 npm run dev:s3 -w @automarket/api      # S3 local (o S3_ENDPOINT de MinIO)
 npm run dev:api                        # API + Socket.io en :4000
 npm run dev:web                        # web en :3000
@@ -308,11 +307,11 @@ npm run dev:web                        # web en :3000
 
 **Pagos con Binance**: en `apps/api/.env` rellena `BINANCE_PAY_ID` (tu Pay ID: app de Binance → Pay → Recibir) y `BINANCE_PAY_NAME`; opcional `BINANCE_PAY_QR_IMAGE_URL` (p. ej. guarda tu QR de cobro en `apps/web/public/binance-qr.png` y usa `http://localhost:3000/binance-qr.png`). Para el cobro automático con Binance Pay añade `BINANCE_PAY_API_KEY` y `BINANCE_PAY_SECRET_KEY` de tu cuenta Binance Merchant y `API_PUBLIC_URL`. Sin ninguno, la web avisa de que los pagos aún no están configurados.
 
-Alternativas a XAMPP: `docker compose up -d` (MySQL 8.4 · Redis · Mailpit en http://localhost:8025; usa el puerto 3306, así que detén antes el MySQL de XAMPP) con `DATABASE_URL=mysql://automarket:automarket@127.0.0.1:3306/automarket`, o `npm run dev:db -w @automarket/api`, que arranca **MySQL 8.4 oficial** en `:3307` con datos efímeros.
+Alternativa a XAMPP: `npm run dev:db -w @automarket/api` arranca **MySQL 8.4 oficial** en `:3307` con datos efímeros.
 
-Cuentas de ejemplo (`seed.ts`): `admin@automarket.dev / Admin2026!`, `vendedor@automarket.dev / Vende2026!` (concesionario «Prestige Motors C.A.», RIF J-40123456-7, plan Concesionario Pro, verificado), `comprador@automarket.dev / Compra2026!` (persona natural, verificada).
+No hay cuentas de ejemplo. Primer administrador: crea tu cuenta en la página, ponle `role = ADMIN` en la tabla `users` (phpMyAdmin), escribe ese correo en `ADMIN_ONE_EMAIL` de `apps/api/.env` y corre `npm run db:bootstrap-admin-one -w @automarket/api`. Datos de prueba (cuentas @automarket.test): `crear-datos-prueba.cmd`.
 
-**Pruebas**: `npm run test:e2e -w @automarket/api` levanta MySQL 8.4 real (o, con `E2E_DATABASE_URL=mysql://root@127.0.0.1:3306`, usa el servidor de XAMPP: crea la base temporal `automarket_e2e` y la borra al terminar), aplica las migraciones y ejecuta **220 comprobaciones** (registro de personas y concesionarios con RIF y anti-bot, recuperación por SMTP, verificación estricta con cédula + selfie + teléfono, foto real y abono obligatorios, límite estricto del plan gratuito, CRUD de anuncios, planes por tipo de cuenta con Binance en modo manual y comercio, webhooks duplicados o con firma manipulada, búsqueda por cercanía, reserva P2P con aviso legal, bloqueo y chat directo con nota de voz, venta concretada y comisión post-venta (manual, Binance Pay y vencida con bloqueo), jobs, fondo del login y Términos desde el panel, administración, exportaciones y PDF de opiniones, contadores en vivo). Binance Pay, Turnstile, S3 y SMTP se sustituyen por dobles locales que respetan su contrato HTTP (`test/fakes.mjs`).
+**Pruebas**: `npm run test:e2e -w @automarket/api` levanta MySQL 8.4 real (o, con `E2E_DATABASE_URL=mysql://root@127.0.0.1:3306`, usa el servidor de XAMPP: crea la base temporal `automarket_e2e` y la borra al terminar), aplica las migraciones y ejecuta **más de 500 comprobaciones** (registro de personas y concesionarios con RIF y anti-bot, recuperación por SMTP, verificación estricta con cédula + selfie + teléfono, foto real y abono obligatorios, límite estricto del plan gratuito, CRUD de anuncios, planes por tipo de cuenta con Binance en modo manual y comercio, webhooks duplicados o con firma manipulada, búsqueda por cercanía, reserva P2P con aviso legal, bloqueo y chat directo con nota de voz, venta concretada y comisión post-venta (manual, Binance Pay y vencida con bloqueo), jobs, fondo del login y Términos desde el panel, administración, exportaciones y PDF de opiniones, contadores en vivo). Binance Pay, Turnstile, S3 y SMTP se sustituyen por dobles locales que respetan su contrato HTTP (`test/fakes.mjs`).
 
 ### Para producción
 
